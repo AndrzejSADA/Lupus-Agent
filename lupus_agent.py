@@ -1,65 +1,52 @@
 import os
-import imaplib
-import email
-from email.header import decode_header
+import pickle
 import telebot
-import schedule
-import time
+from googleapiclient.discovery import build
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 
-# --- KONFIGURACJA (POBIERANIE TYLKO Z SEJFU) ---
-EMAIL = os.environ.get('LUPUS_EMAIL')
-PASSWORD = os.environ.get('LUPUS_PwD')
-SERVER = "imap.gmail.com"
+# Dane z Twoich zmiennych środowiskowych (z .bashrc)
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
-DOSTWCY = ["nju", "nest", "e.on", "pge", "pgnig", "plus"]
+bot = telebot.TeleBot(TOKEN)
 
-def connect_to_mail():
+# Zakres dostępu do Gmaila
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+
+def get_gmail_service():
+    creds = None
+    # Plik token.pickle powstanie po pierwszej autoryzacji
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            # Używamy Twojego pliku credentials.json (musisz go wgrać!)
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            # Metoda run_local_server nie zadziała na serwerze, używamy konsoli
+            creds = flow.run_local_server(port=0, open_browser=False)
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(creds, token)
+
+    return build('gmail', 'v1', credentials=creds)
+
+def main():
     try:
-        if not EMAIL or not PASSWORD:
-            print("❌ Błąd: Nie znaleziono LUPUS_EMAIL lub LUPUS_PwD w Sejfie!")
-            return None
+        service = get_gmail_service()
+        # Przykład: Szukamy maili od nju mobile (faktury)
+        results = service.users().messages().list(userId='me', q='from:nju@njumobile.pl').execute()
+        messages = results.get('messages', [])
 
-        mail = imaplib.IMAP4_SSL(SERVER)
-        mail.login(EMAIL, PASSWORD)
-        print(f"✅ Lupus połączony jako {EMAIL} i skanuje skrzynkę...")
+        if not messages:
+            bot.send_message(CHAT_ID, "🛡️ Lupus: Sprawdziłem pocztę. Brak nowych faktur od nju.")
+        else:
+            bot.send_message(CHAT_ID, f"🛡️ Lupus: Znaleziono {len(messages)} wiadomości od nju!")
 
-        mail.select("inbox")
-        status, messages = mail.search(None, 'UNSEEN')
-
-        for num in messages[0].split():
-            res, msg = mail.fetch(num, "(RFC822)")
-            for response in msg:
-                if isinstance(response, tuple):
-                    msg_obj = email.message_from_bytes(response[1])
-                    subject_data = decode_header(msg_obj["Subject"])[0]
-                    subject = subject_data[0]
-                    if isinstance(subject, bytes):
-                        subject = subject.decode(subject_data[1] or 'utf-8')
-
-                    if any(d in subject.lower() for d in DOSTWCY):
-                        if TOKEN and CHAT_ID:
-                            bot = telebot.TeleBot(TOKEN)
-                            bot.send_message(CHAT_ID, f"🏦 Lupus znalazł: {subject}")
-                            print(f"🚀 Wysłano powiadomienie o: {subject}")
-                        else:
-                            print("❌ Błąd: Brak danych Telegrama w Sejfie")
-        return mail
     except Exception as e:
-        print(f"❌ Błąd połączenia: {e}")
-        return None
-
-def job():
-    print(f"🕒 Uruchamiam skanowanie: {time.ctime()}")
-    connection = connect_to_mail()
-    if connection:
-        connection.logout()
-        print("🔒 Sesja zakończona bezpiecznie.")
+        bot.send_message(CHAT_ID, f"❌ Lupus błąd: {str(e)}")
 
 if __name__ == "__main__":
-    job() 
-    schedule.every().day.at("09:00").do(job)
-    print("🚀 Lupus Agent działa w tle i czeka na 09:00...")
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+    main()
