@@ -3,29 +3,26 @@ import imaplib
 import email
 from email.header import decode_header
 import telebot
+import schedule
+import time
 
-# --- KONFIGURACJA (POBIERANIE Z SEJFU) ---
-EMAIL = "andrzej.skrucha@gmail.com"
-# Zmieniamy GMAIL_PASS na Twoją nazwę z Bash:
+# --- KONFIGURACJA (POBIERANIE TYLKO Z SEJFU) ---
+EMAIL = os.environ.get('LUPUS_EMAIL')
 PASSWORD = os.environ.get('LUPUS_PwD')
 SERVER = "imap.gmail.com"
-
-# Dane Telegrama (nazwy są zgodne z Twoim grepem)
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
-# Twoja lista dostawców
 DOSTWCY = ["nju", "nest", "e.on", "pge", "pgnig", "plus"]
 
 def connect_to_mail():
     try:
-        # Sprawdzamy czy pobrano dane z Sejfu
         if not EMAIL or not PASSWORD:
-            print("❌ Błąd: Nie znaleziono danych logowania w Sejfu (GMAIL_USER/GMAIL_PASS)")
+            print("❌ Błąd: Nie znaleziono LUPUS_EMAIL lub LUPUS_PwD w Sejfie!")
             return None
 
         mail = imaplib.IMAP4_SSL(SERVER)
         mail.login(EMAIL, PASSWORD)
-        print("✅ Lupus połączony i skanuje skrzynkę...")
+        print(f"✅ Lupus połączony jako {EMAIL} i skanuje skrzynkę...")
 
         mail.select("inbox")
         status, messages = mail.search(None, 'UNSEEN')
@@ -35,33 +32,34 @@ def connect_to_mail():
             for response in msg:
                 if isinstance(response, tuple):
                     msg_obj = email.message_from_bytes(response[1])
-
-                    # Odczytujemy temat
                     subject_data = decode_header(msg_obj["Subject"])[0]
                     subject = subject_data[0]
                     if isinstance(subject, bytes):
                         subject = subject.decode(subject_data[1] or 'utf-8')
 
-                    # Sprawdzamy czy pasuje do listy
                     if any(d in subject.lower() for d in DOSTWCY):
-                        TOKEN = os.environ.get('TELEGRAM_TOKEN')
-                        CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
-
                         if TOKEN and CHAT_ID:
                             bot = telebot.TeleBot(TOKEN)
                             bot.send_message(CHAT_ID, f"🏦 Lupus znalazł: {subject}")
                             print(f"🚀 Wysłano powiadomienie o: {subject}")
                         else:
-                            print("❌ Błąd: Brak TELEGRAM_TOKEN lub TELEGRAM_CHAT_ID w Sejfu")
-
+                            print("❌ Błąd: Brak danych Telegrama w Sejfie")
         return mail
     except Exception as e:
-        print(f"❌ Błąd: {e}")
+        print(f"❌ Błąd połączenia: {e}")
         return None
 
-if __name__ == "__main__":
+def job():
+    print(f"🕒 Uruchamiam skanowanie: {time.ctime()}")
     connection = connect_to_mail()
     if connection:
         connection.logout()
-        print("🔒 Sesja zakończona bezpiecznie..")
+        print("🔒 Sesja zakończona bezpiecznie.")
 
+if __name__ == "__main__":
+    job() 
+    schedule.every().day.at("09:00").do(job)
+    print("🚀 Lupus Agent działa w tle i czeka na 09:00...")
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
